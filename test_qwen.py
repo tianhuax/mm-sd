@@ -6,9 +6,24 @@ from torchvision import io
 from typing import Dict
 from transformers import Qwen2VLForConditionalGeneration, AutoTokenizer, AutoProcessor
 
-# Load the model in half-precision on the available device(s)
-model = Qwen2VLForConditionalGeneration.from_pretrained("Qwen/Qwen2-VL-2B-Instruct", device_map="auto")
-processor = AutoProcessor.from_pretrained("Qwen/Qwen2-VL-2B-Instruct")
+# We recommend enabling flash_attention_2 for better acceleration and memory saving, especially in multi-image and video scenarios.
+model = Qwen2VLForConditionalGeneration.from_pretrained(
+    "Qwen/Qwen2-VL-7B-Instruct-AWQ",
+    torch_dtype=torch.float16,
+    attn_implementation="flash_attention_2",
+    device_map="auto",
+)
+# 5.3G vram used for Qwen2-VL-2B-Instruct-AWQ
+# 9.7G vram used for Qwen2-VL-7B-Instruct-AWQ
+
+
+# limit the number of image tokens or else it'll take a ton of vram
+min_pixels = 256*28*28
+max_pixels = 1280*28*28 
+processor = AutoProcessor.from_pretrained("Qwen/Qwen2-VL-7B-Instruct", min_pixels=min_pixels, max_pixels=max_pixels)
+
+# Qwen2-VL-2B-Instruct bfloat16: 14GB vram used
+# Qwen2-VL-7B-Instruct bfloat16: 36GB vram used
 
 # Image
 url = "https://qianwen-res.oss-cn-beijing.aliyuncs.com/Qwen-VL/assets/demo.jpeg"
