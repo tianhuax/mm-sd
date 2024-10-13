@@ -9,10 +9,13 @@ from qwen_vl_utils import process_vision_info
 from utils import get_mismatches, get_parsed_args, run_model, run_model_with_assistant
 
 """
-Preliminary benchmarks for Qwen2-VL-7B-Instruct-AWQ: 
+Preliminary benchmarks for Qwen2-VL-7B-Instruct-AWQ on A100: 
 Average time per input (ms): 5569.69
 Average time per token (ms): 45.80
 
+Preliminary benchmarks for Qwen2-VL-7B-Instruct-AWQ on A10G: 
+Average time per input (ms): 6049.42
+Average time per token (ms): 50.24
 
 """
 
@@ -112,6 +115,9 @@ def main():
 
         # Inference: Generation of the output
         start = time.time()
+
+        # TODO: write our own optimized generate function that also supports assisted generation. 
+        # Berger wants to see the actual implementation here instead of just using the huggingface implementation
         generated_ids = model.generate(**inputs, **generate_kwargs)
         end = time.time()
 
