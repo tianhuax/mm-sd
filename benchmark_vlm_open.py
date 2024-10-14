@@ -1,12 +1,20 @@
-from transformers import AutoTokenizer, AutoModelForCausalLM
-from datasets import load_dataset
-from torch.utils.data import DataLoader
-import time
-from tqdm import tqdm
 import torch
-from transformers import Qwen2VLForConditionalGeneration, AutoProcessor
+from torch.utils.data import DataLoader
+from datasets import load_dataset
+from transformers import (
+    AutoTokenizer,
+    AutoModelForCausalLM,
+    Qwen2VLForConditionalGeneration,
+    AutoProcessor
+)
+from tqdm import tqdm
+import time
 from qwen_vl_utils import process_vision_info
 from utils import get_mismatches, get_parsed_args, run_model, run_model_with_assistant
+
+from spd import (
+    Generation
+)
 
 """
 Preliminary benchmarks for Qwen2-VL-7B-Instruct-AWQ on A100: 
@@ -41,6 +49,36 @@ assistant_model = Qwen2VLForConditionalGeneration.from_pretrained(
     attn_implementation="flash_attention_2",
     device_map="auto",
 )
+
+num_samples = 12
+temp = None # baseline with greedy sampling strategy to get quality guarantees
+outputs = []
+gen_time = []
+num_tokens = []
+
+# model generation kwargs
+# TODO: port the huggingface source code to make this work. 
+# relevant code can be found in transformers/generation/utils.py
+generate_kwargs = {
+    "max_new_tokens": GEN_LEN,
+    # "assistant_model": assistant_model,
+    # "tokenizer": processor,
+    # "assistant_tokenizer": assistant_processor,
+}
+if temp is not None:
+    generate_kwargs.update({
+        "do_sample": True,
+        "temperature": temp,
+        "top_p": 0.001,
+        "top_k": 1,
+    })
+else:
+    generate_kwargs.update({
+        "do_sample": False,
+    })
+
+spd = Generation(model, assistant_model, processor, generate_kwargs)
+
 def process_image(image):
     messages = [
         {
@@ -72,33 +110,9 @@ def process_image(image):
 def custom_collate_fn(batch):
     return [b["image"] for b in batch]
 
+
 def main():
-    num_samples = 12
-    temp = None # baseline with greedy sampling strategy to get quality guarantees
-    outputs = []
-    gen_time = []
-    num_tokens = []
-    
-    # model generation kwargs
-    # TODO: port the huggingface source code to make this work. 
-    # relevant code can be found in transformers/generation/utils.py
-    generate_kwargs = {
-        "max_new_tokens": GEN_LEN,
-        "assistant_model": assistant_model,
-        "tokenizer": processor,
-        "assistant_tokenizer": assistant_processor,
-    }
-    if temp is not None:
-        generate_kwargs.update({
-            "do_sample": True,
-            "temperature": temp,
-            "top_p": 0.001,
-            "top_k": 1,
-        })
-    else:
-        generate_kwargs.update({
-            "do_sample": False,
-        })
+
 
     ds = load_dataset("sayakpaul/coco-30-val-2014", split="train")
     # TODO: study batch inference later, this is a different setting and isn't within scope for now
@@ -111,16 +125,16 @@ def main():
     for i, image in tqdm(enumerate(loader), total=num_samples):
         if i >= num_samples:
             break
+
+        # process image and prepare inputs
         inputs = process_image(image[0])
 
-        # Inference: Generation of the output
+        # run decoder generation
         start = time.time()
-
-        # TODO: write our own optimized generate function that also supports assisted generation. 
-        # Berger wants to see the actual implementation here instead of just using the huggingface implementation
-        generated_ids = model.generate(**inputs, **generate_kwargs)
+        generated_ids = spd.generate(inputs)
         end = time.time()
 
+        # process output to be human readable
         generated_ids_trimmed = [
             out_ids[len(in_ids) :] for in_ids, out_ids in zip(inputs.input_ids, generated_ids)
         ]
@@ -129,15 +143,15 @@ def main():
         )
         outputs.append(output_text)
 
-        if i >= 2:  # discard first two iterations, warmup GPU
+        # warmup GPU by discarding first two iterations from collected metrics
+        if i >= 2:  
             gen_time.append(end - start)
             num_tokens.append(generated_ids.shape[1] - inputs.input_ids.shape[1])
 
+    # print collected metric 
     print(f"Average time per input (ms): {(sum(gen_time) / len(gen_time))*1000:.2f}")
     print(f"Average time per token (ms): {(sum(gen_time) / sum(num_tokens))*1000:.2f}")
 
-
-    # print(outputs)
 
 if __name__ == "__main__":
 
