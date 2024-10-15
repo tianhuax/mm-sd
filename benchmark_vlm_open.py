@@ -25,6 +25,14 @@ Preliminary benchmarks for Qwen2-VL-7B-Instruct-AWQ on A10G:
 Average time per input (ms): 6049.42
 Average time per token (ms): 50.24
 
+Preliminary benchmarks for Qwen2-VL-2B-Instruct-AWQ on A10G: 
+Average time per input (ms): 4998.40
+Average time per token (ms): 47.20
+
+Preliminary benchmarks for speculative decoding on A10G: 
+Average time per input (ms): 792.51
+Average time per token (ms): 46.62
+
 """
 
 GEN_LEN = 128
@@ -61,6 +69,7 @@ num_tokens = []
 # relevant code can be found in transformers/generation/utils.py
 generate_kwargs = {
     "max_new_tokens": GEN_LEN,
+    "use_cache": True,
     # "assistant_model": assistant_model,
     # "tokenizer": processor,
     # "assistant_tokenizer": assistant_processor,
@@ -151,6 +160,8 @@ def main():
     # print collected metric 
     print(f"Average time per input (ms): {(sum(gen_time) / len(gen_time))*1000:.2f}")
     print(f"Average time per token (ms): {(sum(gen_time) / sum(num_tokens))*1000:.2f}")
+    print(f"Number of tokens generated: {sum(num_tokens)}")
+    print(f"outputs: {outputs}")
 
 
 if __name__ == "__main__":

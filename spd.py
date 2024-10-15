@@ -5,8 +5,9 @@ All speculative decoding functionality is custom defined
 """
 
 import torch
-from transformers import GenerationConfig
+from transformers import DynamicCache, GenerationConfig
 import copy
+from candidate_generator import AssistedCandidateGenerator
 
 class Generation: 
 
@@ -20,19 +21,46 @@ class Generation:
         self.model_kwargs = copy.deepcopy(self.generation_config)
 
     def generate(self, inputs):
+        
         # return self.target_model.generate(**inputs, **self.kwargs)
+        # return self.draft_model.generate(**inputs, **self.kwargs)
 
         # extract the input tensor
-        inputs_tensor, model_input_name, model_kwargs = self.prepare_model_inputs(
-            inputs, self.model_kwargs
-        )
+        inputs_tensor, model_input_name = self.prepare_model_inputs(inputs)
         batch_size = inputs_tensor.shape[0]
-        device = inputs_tensor.device
+        self.device = inputs_tensor.device
 
         # prepare special tokens for the generation config
-        self.prepare_special_tokens(device)   
+        self.prepare_special_tokens(self.device)   
+        
+        # prepare 'input_ids', which will be used for auto-regressive generation
+        input_ids = inputs_tensor if model_input_name == "input_ids" else self.model_kwargs.pop("input_ids")
 
-        pass
+        # prepare generation lengths
+        input_ids_length = input_ids.shape[-1]
+        self.generation_config.max_length = self.generation_config.max_new_tokens + input_ids_length
+        self.generation_config.min_length = 0
+
+        # prepare the cache
+        max_cache_length = self.generation_config.max_length
+        self.prepare_cache_for_generation()
+
+        # create the candidate generator
+        candidate_generator = AssistedCandidateGenerator(
+            input_ids, 
+            self.draft_model, 
+            self.generation_config, 
+            self.model_kwargs, 
+        )
+
+        # run speculative decoding
+        result = candidate_generator.run_speculative_decoding(
+            input_ids,
+            generation_config=self.generation_config,
+            model_kwargs=self.model_kwargs,
+        )
+
+        return result
 
     def prepare_generation_config(self):
 
@@ -46,16 +74,16 @@ class Generation:
                 151643
             ],
             pad_token_id=151643,
-            temperature=0.0,
+            # temperature=0.0,
             # top_k=1,
             # top_p=0.001
         )
         config.update(**self.kwargs)
         return config
 
-    def prepare_model_inputs(self, inputs, model_kwargs): 
+    def prepare_model_inputs(self, inputs): 
         model_input_name = "input_ids"
-        return inputs["input_ids"], model_input_name, model_kwargs
+        return inputs["input_ids"], model_input_name
 
     def prepare_special_tokens(self, device):
         
@@ -84,3 +112,9 @@ class Generation:
         self.generation_config._pad_token_tensor = pad_token_tensor
         self.generation_config._decoder_start_token_tensor = decoder_start_token_tensor
 
+    def prepare_cache_for_generation(self):
+        # assistant model provided, need to use dynamic cache
+        self.generation_config.cache_implementation = None
+        self.model_kwargs.past_key_values = DynamicCache()
+
+    
