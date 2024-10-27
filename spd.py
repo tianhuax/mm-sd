@@ -10,6 +10,7 @@ logging.basicConfig(level=logging.DEBUG if False else logging.INFO)
 
 # Global debug flag
 DEBUG = False
+num_draft_samples = 30
 
 class DynamicCache:
     def __init__(self, device=torch.device("cpu")):
@@ -301,7 +302,7 @@ class Generation:
 
         if DEBUG:
             # Log probability ratios
-            logging.debug(f"Probability ratios sample: {is_above_threshold[:3]}")
+            logging.debug(f"Probability ratios sample: {is_above_threshold[:num_draft_samples]}")
 
         # Extract valid tokens based on acceptance using tensor masking
         mask = is_above_threshold
@@ -396,7 +397,7 @@ class Generation:
         while tokens_generated < max_new_tokens and fallback_attempts < max_fallback_attempts:
             # Prepare draft model kwargs with max_new_tokens=3 and convert DynamicCache to list if not empty
             draft_kwargs = self.prepare_model_kwargs(role='draft')
-            draft_kwargs['max_new_tokens'] = 3  # Number of candidates
+            draft_kwargs['max_new_tokens'] = num_draft_samples  # Number of candidates
 
             # Ensure 'max_new_tokens' is on the same device
             draft_kwargs = {k: v.to(self.device) if isinstance(v, torch.Tensor) else v for k, v in draft_kwargs.items()}
