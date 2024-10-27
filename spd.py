@@ -1,4 +1,3 @@
-
 import torch
 from transformers import GenerationConfig
 import copy
@@ -13,9 +12,10 @@ logging.basicConfig(level=logging.DEBUG if False else logging.INFO)
 DEBUG = False
 
 class DynamicCache:
-    def __init__(self):
+    def __init__(self, device=torch.device("cpu")):
         # Initialize an empty list to store past key-values for each layer
         self.past_key_values = []
+        self.device = device
 
     def update(self, new_past_key_values, num_tokens):
         """
@@ -27,14 +27,14 @@ class DynamicCache:
         """
         if not self.past_key_values:
             # Initialize with the first set of past_key_values
-            self.past_key_values = [t.detach() for t in new_past_key_values]
+            self.past_key_values = [t.detach().to(self.device) for t in new_past_key_values]
             if DEBUG:
                 logging.debug("Cache initialized with first past_key_values.")
         else:
             for i, (new_k, new_v) in enumerate(new_past_key_values):
                 # Concatenate along the sequence dimension (usually dim=-1)
-                self.past_key_values[i] = torch.cat((self.past_key_values[i], new_k.detach()), dim=-1)
-                self.past_key_values[i] = torch.cat((self.past_key_values[i], new_v.detach()), dim=-1)
+                self.past_key_values[i] = torch.cat((self.past_key_values[i], new_k.detach().to(self.device)), dim=-1)
+                self.past_key_values[i] = torch.cat((self.past_key_values[i], new_v.detach().to(self.device)), dim=-1)
             if DEBUG:
                 logging.debug(f"Cache updated with {num_tokens} new tokens.")
 
@@ -74,6 +74,9 @@ class Generation:
         self.processor = processor
         self.kwargs = kwargs
         self.tokenizer = processor.tokenizer  # Ensure tokenizer is accessible and consistent
+
+        # Determine the device from the target model
+        self.device = next(target_model.parameters()).device
 
         # Prepare separate generation configurations for target and draft models
         self.target_generation_config = self.prepare_generation_config()
@@ -140,8 +143,8 @@ class Generation:
 
         # Check if 'past_key_values' is already present
         if 'past_key_values' not in model_kwargs or model_kwargs['past_key_values'] is None:
-            # Initialize DynamicCache and assign to 'past_key_values'
-            model_kwargs['past_key_values'] = DynamicCache()
+            # Initialize DynamicCache with the correct device and assign to 'past_key_values'
+            model_kwargs['past_key_values'] = DynamicCache(device=self.device)
             if DEBUG:
                 logging.debug(f"DynamicCache initialized and assigned to '{role}_past_key_values'.")
         elif DEBUG:
@@ -176,7 +179,7 @@ class Generation:
 
     def prepare_model_kwargs(self, role='target'):
         """
-        Prepares model_kwargs for generation by incorporating cached past_key_values.
+        Preparates model_kwargs for generation by incorporating cached past_key_values.
         Only includes 'past_key_values' if the cache is not empty.
 
         Args:
@@ -205,6 +208,47 @@ class Generation:
 
         return model_kwargs
 
+    
+    def speculative_sampling_with_profiling(self, draft_logits, target_logits, candidate_new_tokens, threshold=0.1):
+        """
+        Applies speculative sampling with profiling on the speculative_sampling method.
+
+        Args:
+            draft_logits (torch.Tensor): Logits from the draft model.
+            target_logits (torch.Tensor): Logits from the target model.
+            candidate_new_tokens (torch.Tensor): Candidate tokens from the draft model.
+            threshold (float): Confidence threshold for acceptance.
+
+        Returns:
+            torch.Tensor: Accepted tokens.
+            int: Number of matches.
+        """
+        from torch.profiler import profile, ProfilerActivity, tensorboard_trace_handler, record_function
+        import os
+
+        # Create profile_logs directory if it doesn't exist
+        os.makedirs("profile_logs", exist_ok=True)
+
+        with profile(
+            activities=[
+                ProfilerActivity.CPU,
+                ProfilerActivity.CUDA
+            ],
+            record_shapes=True,
+            profile_memory=True,
+            with_stack=True,
+            with_flops=True,
+            on_trace_ready=tensorboard_trace_handler("./profile_logs")
+        ) as prof:
+            with record_function("speculative_sampling"):
+                result = self.speculative_sampling(draft_logits, target_logits, candidate_new_tokens, threshold)
+            prof.step()
+
+        # Print profiling results
+        print(prof.key_averages().table(sort_by="cuda_time_total", row_limit=10))
+        
+        return result
+
     def speculative_sampling(self, draft_logits, target_logits, candidate_new_tokens, threshold=0.1):
         """
         Applies sampling based on probability ratios to accept or reject candidate tokens.
@@ -216,9 +260,14 @@ class Generation:
             threshold (float): Confidence threshold for acceptance.
 
         Returns:
-            valid_tokens_padded (torch.Tensor): Tokens that are accepted.
-            n_matches_max (int): Maximum number of tokens that matched across the batch.
+            torch.Tensor: Tokens that are accepted.
+            int: Number of matches.
         """
+        # Ensure all tensors are on the correct device
+        draft_logits = draft_logits.to(self.device)
+        target_logits = target_logits.to(self.device)
+        candidate_new_tokens = candidate_new_tokens.to(self.device)
+
         # Calculate probabilities
         q = torch.softmax(draft_logits, dim=-1)  # Draft model probabilities
         p = torch.softmax(target_logits, dim=-1)  # Target model probabilities
@@ -260,9 +309,9 @@ class Generation:
         n_matches_max = valid_tokens.size(0)
 
         if valid_tokens.numel() > 0:
-            valid_tokens_padded = valid_tokens.unsqueeze(0)  # Shape: (1, num_valid_tokens)
+            valid_tokens_padded = valid_tokens.unsqueeze(0).to(self.device)  # Shape: (1, num_valid_tokens)
         else:
-            valid_tokens_padded = torch.empty((1, 0), dtype=torch.long, device=candidate_new_tokens.device)
+            valid_tokens_padded = torch.empty((1, 0), dtype=torch.long, device=self.device)
 
         if DEBUG:
             logging.debug(f"valid_tokens_padded shape: {valid_tokens_padded.shape}")
@@ -284,7 +333,20 @@ class Generation:
         """
         from torch.profiler import profile, ProfilerActivity, tensorboard_trace_handler, record_function
 
-        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        # Move all input tensors to the correct device
+        input_ids = inputs['input_ids'].to(self.device)
+        attention_mask = inputs['attention_mask'].to(self.device)
+        pixel_values = inputs['pixel_values'].to(self.device)
+        image_grid_thw = inputs['image_grid_thw']
+        if image_grid_thw is not None:
+            image_grid_thw = image_grid_thw.to(self.device)
+
+        inputs = {
+            'input_ids': input_ids,
+            'attention_mask': attention_mask,
+            'pixel_values': pixel_values,
+            'image_grid_thw': image_grid_thw
+        }
         
         with profile(
             activities=[ProfilerActivity.CPU, ProfilerActivity.CUDA],  # Include CUDA if using GPU
@@ -312,10 +374,12 @@ class Generation:
             torch.Tensor: Generated input_ids with appended tokens.
         """
 
-        input_ids = inputs['input_ids']
-        attention_mask = inputs['attention_mask']
-        pixel_values = inputs['pixel_values']
-        image_grid_thw = inputs['image_grid_thw']  # Ensure this is correctly set
+        input_ids = inputs['input_ids'].to(self.device)
+        attention_mask = inputs['attention_mask'].to(self.device)
+        pixel_values = inputs['pixel_values'].to(self.device)
+        image_grid_thw = inputs['image_grid_thw']
+        if image_grid_thw is not None:
+            image_grid_thw = image_grid_thw.to(self.device)  # Ensure this is correctly set
 
         # Log the presence of image_grid_thw
         if image_grid_thw is None:
@@ -334,6 +398,9 @@ class Generation:
             draft_kwargs = self.prepare_model_kwargs(role='draft')
             draft_kwargs['max_new_tokens'] = 3  # Number of candidates
 
+            # Ensure 'max_new_tokens' is on the same device
+            draft_kwargs = {k: v.to(self.device) if isinstance(v, torch.Tensor) else v for k, v in draft_kwargs.items()}
+
             # Use mixed precision for draft model generation
             with autocast(enabled=DEBUG and torch.cuda.is_available()):
                 draft_outputs = self.draft_model.generate(
@@ -344,7 +411,7 @@ class Generation:
                     **draft_kwargs  # 'past_key_values' included only if cache is not empty
                 )
 
-            candidate_new_tokens = draft_outputs[:, input_ids.shape[1]:]
+            candidate_new_tokens = draft_outputs[:, input_ids.shape[1]:].to(self.device)
 
             # Get draft logits
             with autocast(enabled=DEBUG and torch.cuda.is_available()):
@@ -354,7 +421,7 @@ class Generation:
                     pixel_values=pixel_values,
                     image_grid_thw=image_grid_thw,
                     past_key_values=self.draft_model_kwargs['past_key_values'].to_list() if isinstance(self.draft_model_kwargs['past_key_values'], DynamicCache) and len(self.draft_model_kwargs['past_key_values']) > 0 else None
-                )['logits']
+                )['logits'].to(self.device)
 
             # Get target logits
             with autocast(enabled=DEBUG and torch.cuda.is_available()):
@@ -365,9 +432,9 @@ class Generation:
                     image_grid_thw=image_grid_thw,
                     past_key_values=self.target_model_kwargs['past_key_values'].to_list() if isinstance(self.target_model_kwargs['past_key_values'], DynamicCache) and len(self.target_model_kwargs['past_key_values']) > 0 else None
                 )
-            target_logits = target_outputs['logits']
+            target_logits = target_outputs['logits'].to(self.device)
 
-            # Speculative Sampling
+            # NOTE: using profiler Speculative Sampling
             valid_tokens_padded, n_matches = self.speculative_sampling(
                 draft_logits=draft_logits,
                 target_logits=target_logits,
@@ -382,6 +449,9 @@ class Generation:
                 target_kwargs = self.prepare_model_kwargs(role='target')
                 target_kwargs['max_new_tokens'] = 1  # Generate one token
 
+                # Ensure 'max_new_tokens' is on the same device
+                target_kwargs = {k: v.to(self.device) if isinstance(v, torch.Tensor) else v for k, v in target_kwargs.items()}
+
                 # Use mixed precision for target model fallback generation
                 with autocast(enabled=DEBUG and torch.cuda.is_available()):
                     fallback_outputs = self.target_model.generate(
@@ -391,7 +461,7 @@ class Generation:
                         image_grid_thw=image_grid_thw,
                         **target_kwargs  # 'past_key_values' included only if cache is not empty
                     )
-                fallback_token = fallback_outputs[:, input_ids.shape[1]:]
+                fallback_token = fallback_outputs[:, input_ids.shape[1]:].to(self.device)
                 if DEBUG:
                     logging.debug(f"Fallback token shape: {fallback_token.shape}")
 
@@ -408,11 +478,11 @@ class Generation:
                         continue  # Retry fallback sampling
 
                 # Update input_ids and attention_mask with the fallback token
-                input_ids = torch.cat((input_ids, fallback_token), dim=-1)
+                input_ids = torch.cat((input_ids, fallback_token), dim=-1).to(self.device)
                 attention_mask = torch.cat((
                     attention_mask,
-                    torch.ones((attention_mask.shape[0], 1), device=attention_mask.device)
-                ), dim=1)
+                    torch.ones((attention_mask.shape[0], 1), device=self.device)
+                ), dim=1).to(self.device)
                 tokens_generated += 1
 
                 # Update cache with fallback token
@@ -421,11 +491,11 @@ class Generation:
                 continue  # Proceed to the next iteration
 
             # Update input_ids and attention_mask with valid_tokens
-            input_ids = torch.cat((input_ids, valid_tokens_padded), dim=-1)
+            input_ids = torch.cat((input_ids, valid_tokens_padded), dim=-1).to(self.device)
             attention_mask = torch.cat((
                 attention_mask,
-                torch.ones((attention_mask.shape[0], valid_tokens_padded.shape[1]), device=attention_mask.device)
-            ), dim=1)
+                torch.ones((attention_mask.shape[0], valid_tokens_padded.shape[1]), device=self.device)
+            ), dim=1).to(self.device)
             tokens_generated += valid_tokens_padded.shape[1]
 
             # Update cache with new tokens

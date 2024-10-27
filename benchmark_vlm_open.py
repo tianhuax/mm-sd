@@ -157,8 +157,10 @@ def main():
 
         # run decoder generation
         start = time.time()
-        # generated_ids = spd.generate(inputs)
-        generated_ids = spd.generate_with_profiling(inputs) # profile torch generation to identify bottlenecks
+        generated_ids = spd.generate(inputs)
+
+        # NOTE: using profiler for generation
+        # generated_ids = spd.generate_with_profiling(inputs) # profile torch generation to identify bottlenecks
         end = time.time()
 
         # process output to be human readable
