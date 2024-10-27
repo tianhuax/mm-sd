@@ -13,6 +13,7 @@ class AssistedCandidateGenerator():
         assistant_model,
         generation_config,
         model_kwargs,
+        original_inputs,  # Add this parameter
     ):
         # Make sure all data at the same device as assistant model
         self.device = assistant_model.device
@@ -61,6 +62,12 @@ class AssistedCandidateGenerator():
         # We need to roll back the cache in assisted generation, only DynamicCache is supported
         self.generation_config.cache_implementation = None
 
+        # Store the original inputs
+        self.original_inputs = original_inputs
+
+        # Store input_ids for tracking
+        self.input_ids = input_ids
+        
     def get_candidates(self, input_ids: torch.LongTensor) -> Tuple[torch.LongTensor, Optional[torch.FloatTensor]]:
         """
         Fetches the candidates to be tried for the current input.
@@ -103,12 +110,23 @@ class AssistedCandidateGenerator():
             "min_new_tokens": min_new_tokens,
             "max_new_tokens": max_new_tokens,
             "generation_config": self.generation_config,
+            # Add the additional required keys from original inputs
+            "attention_mask": self.original_inputs.get("attention_mask"),
+            "pixel_values": self.original_inputs.get("pixel_values"),
+            "image_grid_thw": self.original_inputs.get("image_grid_thw"),
         }
+
+        # Ensure we're passing all necessary kwargs
+        for key, value in self.original_inputs.items():
+            if key not in assistant_generation_kwargs and key not in self.assistant_kwargs:
+                assistant_generation_kwargs[key] = value
+
         update_dict = {
             "return_dict_in_generate": True,
             "output_scores": True,
         }
         self.assistant_kwargs.update(**update_dict)
+        # need to ensure that assistant_generation_kwargs also contains dict_keys(['input_ids', 'attention_mask', 'pixel_values', 'image_grid_thw'])
         assistant_output = self.assistant_model.generate(**assistant_generation_kwargs, **self.assistant_kwargs)
 
         # 3. Update variables for the next round of candidate generation
@@ -320,11 +338,10 @@ class AssistedCandidateGenerator():
             hasattr(self, "assistant_model")
             and self.assistant_model.generation_config.num_assistant_tokens_schedule == "heuristic"
         ):
-            self.assistant_model.generation_config.num_assistant_tokens = (
-                self.num_assistant_tokens
-            )
-        else:
-            return input_ids
+            self.assistant_model.generation_config.num_assistant_tokens = self.num_assistant_tokens
+        
+        # Always return the input_ids
+        return input_ids
 
 
     def speculative_sampling(
@@ -517,3 +534,5 @@ class AssistedCandidateGenerator():
             cache_name = "cache_params"
 
         return cache_name, past_key_values
+
+

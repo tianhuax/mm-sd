@@ -48,8 +48,22 @@ model = Qwen2VLForConditionalGeneration.from_pretrained(
 # limit the number of image tokens or else it'll take a ton of vram
 min_pixels = 256*28*28
 max_pixels = 1280*28*28 
-processor = AutoProcessor.from_pretrained("Qwen/Qwen2-VL-7B-Instruct", min_pixels=min_pixels, max_pixels=max_pixels)
-assistant_processor = AutoProcessor.from_pretrained("Qwen/Qwen2-VL-2B-Instruct", min_pixels=min_pixels, max_pixels=max_pixels)
+processor = AutoProcessor.from_pretrained(
+    "Qwen/Qwen2-VL-7B-Instruct", 
+    min_pixels=min_pixels, 
+    max_pixels=max_pixels,
+    do_resize=True,
+    do_rescale=True,
+    do_normalize=True
+)
+assistant_processor = AutoProcessor.from_pretrained(
+    "Qwen/Qwen2-VL-2B-Instruct", 
+    min_pixels=min_pixels, 
+    max_pixels=max_pixels,
+    do_resize=True,
+    do_rescale=True,
+    do_normalize=True
+)
 # load draft model for speculative decoding
 assistant_model = Qwen2VLForConditionalGeneration.from_pretrained(
     "Qwen/Qwen2-VL-2B-Instruct-AWQ",
@@ -58,7 +72,7 @@ assistant_model = Qwen2VLForConditionalGeneration.from_pretrained(
     device_map="auto",
 )
 
-num_samples = 12
+num_samples = 3
 temp = None # baseline with greedy sampling strategy to get quality guarantees
 outputs = []
 gen_time = []
@@ -87,6 +101,9 @@ else:
     })
 
 spd = Generation(model, assistant_model, processor, generate_kwargs)
+
+# FIXME: sanity check lmao
+# spd = Generation(assistant_model, assistant_model, processor, generate_kwargs)
 
 def process_image(image):
     messages = [
@@ -140,7 +157,8 @@ def main():
 
         # run decoder generation
         start = time.time()
-        generated_ids = spd.generate(inputs)
+        # generated_ids = spd.generate(inputs)
+        generated_ids = spd.generate_with_profiling(inputs) # profile torch generation to identify bottlenecks
         end = time.time()
 
         # process output to be human readable
