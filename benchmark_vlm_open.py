@@ -11,7 +11,7 @@ from tqdm import tqdm
 import time
 from qwen_vl_utils import process_vision_info
 from utils import get_mismatches, get_parsed_args, run_model, run_model_with_assistant
-
+import asyncio
 from spd import (
     Generation
 )
