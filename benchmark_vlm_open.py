@@ -45,9 +45,16 @@ model = Qwen2VLForConditionalGeneration.from_pretrained(
     device_map="auto",
 )
 
-# limit the number of image tokens or else it'll take a ton of vram
-min_pixels = 256*28*28
-max_pixels = 1280*28*28 
+# # limit the number of image tokens or else it'll take a ton of vram
+# min_pixels = 256*28*28
+# max_pixels = 1280*28*28 
+
+# very conservative settings to prevent OOM
+# Standard resolution commonly used in vision models (224x224)
+min_pixels = 224*224  # = 50,176 pixels
+# Maximum resolution that balances quality and memory
+max_pixels = 384*384  # = 147,456 pixels
+
 processor = AutoProcessor.from_pretrained(
     "Qwen/Qwen2-VL-7B-Instruct", 
     min_pixels=min_pixels, 
@@ -178,10 +185,11 @@ def main():
             num_tokens.append(generated_ids.shape[1] - inputs.input_ids.shape[1])
 
     # print collected metric 
+    print(f"outputs: {outputs}")
     print(f"Average time per input (ms): {(sum(gen_time) / len(gen_time))*1000:.2f}")
     print(f"Average time per token (ms): {(sum(gen_time) / sum(num_tokens))*1000:.2f}")
     print(f"Number of tokens generated: {sum(num_tokens)}")
-    print(f"outputs: {outputs}")
+
 
 
 if __name__ == "__main__":
