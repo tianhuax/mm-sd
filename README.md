@@ -63,7 +63,7 @@ This is a project by Haoli Yin and Siddharth Shah for the course Advanced Machin
 
 Example command:
 ```
-python benchmark_vlm_open.py
+python benchmark_qwen_open.py
 ```
 
 See `get_parsed_args()` in `utils.py` for a list of flags.

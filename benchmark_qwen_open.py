@@ -45,6 +45,14 @@ model = Qwen2VLForConditionalGeneration.from_pretrained(
     device_map="auto",
 )
 
+# load draft model for speculative decoding
+assistant_model = Qwen2VLForConditionalGeneration.from_pretrained(
+    "Qwen/Qwen2-VL-2B-Instruct-AWQ",
+    torch_dtype=torch.float16,
+    attn_implementation="flash_attention_2",
+    device_map="auto",
+)
+
 # # limit the number of image tokens or else it'll take a ton of vram
 # min_pixels = 256*28*28
 # max_pixels = 1280*28*28 
@@ -70,13 +78,6 @@ assistant_processor = AutoProcessor.from_pretrained(
     do_resize=True,
     do_rescale=True,
     do_normalize=True
-)
-# load draft model for speculative decoding
-assistant_model = Qwen2VLForConditionalGeneration.from_pretrained(
-    "Qwen/Qwen2-VL-2B-Instruct-AWQ",
-    torch_dtype=torch.float16,
-    attn_implementation="flash_attention_2",
-    device_map="auto",
 )
 
 num_samples = 3
