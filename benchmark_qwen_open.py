@@ -80,11 +80,13 @@ assistant_processor = AutoProcessor.from_pretrained(
     do_normalize=True
 )
 
-num_samples = 3
+num_samples = 10
 temp = None # baseline with greedy sampling strategy to get quality guarantees
 outputs = []
 gen_time = []
 num_tokens = []
+gen_time_og = []
+num_tokens_og = []
 
 # model generation kwargs
 # TODO: port the huggingface source code to make this work. 
@@ -185,11 +187,25 @@ def main():
             gen_time.append(end - start)
             num_tokens.append(generated_ids.shape[1] - inputs.input_ids.shape[1])
 
+        # Compare with no sd
+        start_og = time.time()
+        generated_ids_og = model.generate(**inputs, max_new_tokens=GEN_LEN)
+        end_og = time.time()
+        if i >= 2:  
+            gen_time_og.append(end_og - start_og)
+            num_tokens_og.append(generated_ids_og.shape[1] - inputs.input_ids.shape[1])
+
+    
+    
     # print collected metric 
     print(f"outputs: {outputs}")
     print(f"Average time per input (ms): {(sum(gen_time) / len(gen_time))*1000:.2f}")
     print(f"Average time per token (ms): {(sum(gen_time) / sum(num_tokens))*1000:.2f}")
     print(f"Number of tokens generated: {sum(num_tokens)}")
+
+    print(f"OG Average time per input (ms): {(sum(gen_time_og) / len(gen_time_og))*1000:.2f}")
+    print(f"OG Average time per token (ms): {(sum(gen_time_og) / sum(num_tokens_og))*1000:.2f}")
+    print(f"OG Number of tokens generated: {sum(num_tokens_og)}")
 
 
 

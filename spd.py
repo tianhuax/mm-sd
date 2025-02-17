@@ -7,7 +7,7 @@ import gc
 logging.basicConfig(level=logging.DEBUG)
 DEBUG = False
 FIRST_N_TOKENS = 3
-NUM_DRAFT_SAMPLES = 6
+NUM_DRAFT_SAMPLES = 3
 
 
 class DynamicCache:
